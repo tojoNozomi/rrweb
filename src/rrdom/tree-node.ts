@@ -1,5 +1,5 @@
 import { NodeType, serializedNodeWithId } from 'rrweb-snapshot';
-import { CSSStyleDeclaration } from 'cssstyle';
+import { parseCSSText, camelize, toCSSText } from './style';
 
 export abstract class RRNode {
   public __sn: serializedNodeWithId;
@@ -156,14 +156,23 @@ export class RRElement extends RRNode {
   }
 
   get style() {
-    const CSSStyle = new CSSStyleDeclaration();
-    CSSStyle.cssText = this.attributes.style || '';
-    (CSSStyle as CSSStyleDeclaration & {
-      _onChange: (newCSSText: string) => void;
-    })._onChange = (newCSSText: string) => {
-      this.attributes.style = newCSSText;
+    const style = parseCSSText(this.attributes.style) as Record<
+      string,
+      string
+    > & {
+      setProperty: (
+        name: string,
+        value: string | null,
+        priority?: string | null,
+      ) => void;
     };
-    return CSSStyle;
+    style.setProperty = (name: string, value: string | null) => {
+      const normalizedName = camelize(name);
+      if (!value) delete style[normalizedName];
+      else style[normalizedName] = value;
+      this.attributes.style = toCSSText(style);
+    };
+    return style;
   }
 
   public setAttribute(name: string, attribute: string) {
