@@ -1,10 +1,13 @@
 import { NodeType, serializedNodeWithId } from 'rrweb-snapshot';
+import { CSSStyleDeclaration } from 'cssstyle';
 
 export abstract class RRNode {
   public __sn: serializedNodeWithId;
   public children: Array<RRNode>;
   public parentElement: RRElement | null = null;
   public parentNode: RRNode | null = null;
+  public ELEMENT_NODE = 1;
+  public TEXT_NODE = 3;
 
   constructor() {
     this.children = [];
@@ -29,17 +32,27 @@ export abstract class RRNode {
 
   abstract appendChild(newChild: RRNode): RRNode;
 
-  insertBefore() {}
-
-  contains(node: RRNode) {
-    return false;
+  insertBefore() {
+    throw new Error('Not implemented yet.');
   }
 
-  removeChild(node: RRNode) {}
+  contains(node: RRNode) {
+    throw new Error('Not implemented yet.');
+  }
+
+  removeChild(node: RRNode) {
+    const indexOfChild = this.children.indexOf(node);
+    if (indexOfChild !== -1) {
+      this.children.splice(indexOfChild, 1);
+      node.parentElement = null;
+      node.parentNode = null;
+    }
+  }
 }
 
 export class RRDocument extends RRNode {
   public documentElement: RRElement;
+  public implementation = this;
 
   public appendChild(childNode: RRNode) {
     const nodeType = childNode.nodeType;
@@ -52,14 +65,18 @@ export class RRDocument extends RRNode {
         );
       }
     }
+    childNode.parentElement = null;
+    childNode.parentNode = this;
     this.children.push(childNode);
+    if (childNode instanceof RRElement && childNode.tagName === 'html')
+      this.documentElement = childNode;
     return childNode;
   }
 
   public createDocument(
-    namespace: string | null,
-    qualifiedName: string | null,
-    doctype?: DocumentType | null,
+    _namespace: string | null,
+    _qualifiedName: string | null,
+    _doctype?: DocumentType | null,
   ) {
     return new RRDocument();
   }
@@ -72,15 +89,23 @@ export class RRDocument extends RRNode {
     return new RRDocumentType(qualifiedName, publicId, systemId);
   }
 
+  public createElement<K extends keyof HTMLElementTagNameMap>(
+    tagName: K,
+  ): RRElementType<K>;
+  public createElement(tagName: string): RRElement;
   public createElement(tagName: string) {
-    return new RRElement(tagName);
+    const lowerTagName = tagName.toLowerCase();
+    if (lowerTagName === 'img') return new RRImageElement('img');
+    if (lowerTagName === 'audio' || lowerTagName === 'video')
+      return new RRMediaElement(lowerTagName);
+    return new RRElement(lowerTagName);
   }
 
   public createElementNS(
     _namespaceURI: 'http://www.w3.org/2000/svg',
     qualifiedName: string,
   ) {
-    return this.createElement(qualifiedName);
+    return this.createElement(qualifiedName as keyof HTMLElementTagNameMap);
   }
 
   public createComment(data: string) {
@@ -120,26 +145,74 @@ export class RRDocumentType extends RRNode {
 
 export class RRElement extends RRNode {
   public tagName: string;
-  public attributes: Record<string, string>;
+  public attributes: Record<string, string> = {};
   public scrollLeft: number = 0;
   public scrollTop: number = 0;
+  public shadowRoot: RRElement | null = null;
 
   constructor(tagName: string) {
     super();
     this.tagName = tagName;
   }
 
+  get style() {
+    const CSSStyle = new CSSStyleDeclaration();
+    CSSStyle.cssText = this.attributes.style || '';
+    (CSSStyle as CSSStyleDeclaration & {
+      _onChange: (newCSSText: string) => void;
+    })._onChange = (newCSSText: string) => {
+      this.attributes.style = newCSSText;
+    };
+    return CSSStyle;
+  }
+
   public setAttribute(name: string, attribute: string) {
     this.attributes[name] = attribute;
+  }
+
+  public setAttributeNS(
+    _namespace: string | null,
+    qualifiedName: string,
+    value: string,
+  ): void {
+    this.setAttribute(qualifiedName, value);
   }
 
   public removeAttribute(name: string) {
     delete this.attributes[name];
   }
 
-  appendChild(newChild: RRNode): RRNode {
+  public appendChild(newChild: RRNode): RRNode {
     this.children.push(newChild);
+    newChild.parentNode = this;
+    newChild.parentElement = this;
     return newChild;
+  }
+
+  /**
+   * Creates a shadow root for element and returns it.
+   */
+  public attachShadow(init: ShadowRootInit): RRElement {
+    this.shadowRoot = init.mode === 'open' ? this : null;
+    return this;
+  }
+}
+
+export class RRImageElement extends RRElement {
+  public src: string;
+  public width: number;
+  public height: number;
+  public onload: ((this: GlobalEventHandlers, ev: Event) => any) | null;
+}
+
+export class RRMediaElement extends RRElement {
+  public currentTime: number;
+  public paused: boolean;
+  public async play() {
+    this.paused = false;
+  }
+  public async pause() {
+    this.paused = true;
   }
 }
 
@@ -186,3 +259,13 @@ export class RRCDATASection extends RRNode {
     );
   }
 }
+
+interface RRElementTagNameMap {
+  img: RRImageElement;
+  audio: RRMediaElement;
+  video: RRMediaElement;
+}
+
+type RRElementType<
+  K extends keyof HTMLElementTagNameMap
+> = K extends keyof RRElementTagNameMap ? RRElementTagNameMap[K] : RRElement;
