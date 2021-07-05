@@ -2,12 +2,12 @@ import { NodeType, serializedNodeWithId } from 'rrweb-snapshot';
 import { parseCSSText, camelize, toCSSText } from './style';
 
 export abstract class RRNode {
-  public __sn: serializedNodeWithId;
-  public children: Array<RRNode>;
-  public parentElement: RRElement | null = null;
-  public parentNode: RRNode | null = null;
-  public ELEMENT_NODE = 1;
-  public TEXT_NODE = 3;
+  __sn: serializedNodeWithId;
+  children: Array<RRNode>;
+  parentElement: RRElement | null = null;
+  parentNode: RRNode | null = null;
+  ELEMENT_NODE = 1;
+  TEXT_NODE = 3;
 
   constructor() {
     this.children = [];
@@ -30,10 +30,16 @@ export abstract class RRNode {
     return this.children;
   }
 
-  abstract appendChild(newChild: RRNode): RRNode;
+  appendChild(newChild: RRNode): RRNode {
+    throw new Error(
+      `RRDomException: Failed to execute 'appendChild' on 'RRNode': This RRNode type does not support this method.`,
+    );
+  }
 
-  insertBefore() {
-    throw new Error('Not implemented yet.');
+  insertBefore(newChild: RRNode, refChild: RRNode | null): RRNode {
+    throw new Error(
+      `RRDomException: Failed to execute 'insertBefore' on 'RRNode': This RRNode type does not support this method.`,
+    );
   }
 
   contains(node: RRNode) {
@@ -50,11 +56,44 @@ export abstract class RRNode {
   }
 }
 
-export class RRDocument extends RRNode {
-  public documentElement: RRElement;
-  public implementation = this;
+export class RRWindow {
+  scrollLeft = 0;
+  scrollTop = 0;
+  scrollTo(options?: ScrollToOptions) {
+    if (!options) return;
+    if (typeof options.left === 'number') this.scrollLeft = options.left;
+    if (typeof options.top === 'number') this.scrollTop = options.top;
+  }
+}
 
-  public appendChild(childNode: RRNode) {
+export class RRDocument extends RRNode {
+  get documentElement() {
+    return this.children.filter(
+      (node) => node instanceof RRElement && node.tagName === 'html',
+    )[0];
+  }
+
+  get body() {
+    return (
+      this.documentElement?.children.filter(
+        (node) => node instanceof RRElement && node.tagName === 'body',
+      )[0] || null
+    );
+  }
+
+  get head() {
+    return (
+      this.documentElement?.children.filter(
+        (node) => node instanceof RRElement && node.tagName === 'head',
+      )[0] || null
+    );
+  }
+
+  get implementation() {
+    return this;
+  }
+
+  appendChild(childNode: RRNode) {
     const nodeType = childNode.nodeType;
     if (nodeType === NodeType.Element || nodeType === NodeType.DocumentType) {
       if (this.children.some((s) => s.nodeType === nodeType)) {
@@ -68,12 +107,32 @@ export class RRDocument extends RRNode {
     childNode.parentElement = null;
     childNode.parentNode = this;
     this.children.push(childNode);
-    if (childNode instanceof RRElement && childNode.tagName === 'html')
-      this.documentElement = childNode;
     return childNode;
   }
 
-  public createDocument(
+  insertBefore(newChild: RRNode, refChild: RRNode | null) {
+    if (refChild === null) return this.appendChild(newChild);
+    const childIndex = this.children.indexOf(refChild);
+    if (childIndex == -1)
+      throw new Error(
+        "Failed to execute 'insertBefore' on 'RRNode': The RRNode before which the new node is to be inserted is not a child of this RRNode.",
+      );
+    this.children.splice(childIndex, 0, newChild);
+    return newChild;
+  }
+
+  getElementsByTagName(tagName: string): RRElement[] {
+    let elements: RRElement[] = [];
+    if (this instanceof RRElement && this.tagName === tagName)
+      elements.push(this);
+    for (const child of this.children) {
+      if (child instanceof RRElement)
+        elements = elements.concat(child.getElementsByTagName(tagName));
+    }
+    return elements;
+  }
+
+  createDocument(
     _namespace: string | null,
     _qualifiedName: string | null,
     _doctype?: DocumentType | null,
@@ -81,7 +140,7 @@ export class RRDocument extends RRNode {
     return new RRDocument();
   }
 
-  public createDocumentType(
+  createDocumentType(
     qualifiedName: string,
     publicId: string,
     systemId: string,
@@ -89,39 +148,46 @@ export class RRDocument extends RRNode {
     return new RRDocumentType(qualifiedName, publicId, systemId);
   }
 
-  public createElement<K extends keyof HTMLElementTagNameMap>(
+  createElement<K extends keyof HTMLElementTagNameMap>(
     tagName: K,
   ): RRElementType<K>;
-  public createElement(tagName: string): RRElement;
-  public createElement(tagName: string) {
+  createElement(tagName: string): RRElement;
+  createElement(tagName: string) {
     const lowerTagName = tagName.toLowerCase();
-    if (lowerTagName === 'img') return new RRImageElement('img');
-    if (lowerTagName === 'audio' || lowerTagName === 'video')
-      return new RRMediaElement(lowerTagName);
-    return new RRElement(lowerTagName);
+    switch (lowerTagName) {
+      case 'audio':
+      case 'video':
+        return new RRMediaElement(lowerTagName);
+      case 'iframe':
+        return new RRIframeElement(lowerTagName);
+      case 'img':
+        return new RRImageElement('img');
+      default:
+        return new RRElement(lowerTagName);
+    }
   }
 
-  public createElementNS(
+  createElementNS(
     _namespaceURI: 'http://www.w3.org/2000/svg',
     qualifiedName: string,
   ) {
     return this.createElement(qualifiedName as keyof HTMLElementTagNameMap);
   }
 
-  public createComment(data: string) {
+  createComment(data: string) {
     return new RRComment(data);
   }
 
-  public createCDATASection(data: string) {
+  createCDATASection(data: string) {
     return new RRCDATASection(data);
   }
 
-  public createTextNode(data: string) {
+  createTextNode(data: string) {
     return new RRText(data);
   }
 
-  public open() {}
-  public close() {}
+  open() {}
+  close() {}
 }
 
 export class RRDocumentType extends RRNode {
@@ -135,31 +201,36 @@ export class RRDocumentType extends RRNode {
     this.publicId = publicId;
     this.systemId = systemId;
   }
-
-  appendChild(_newChild: RRNode): RRNode {
-    throw new Error(
-      `RRDomException: Failed to execute 'appendChild' on 'RRNode': This RRNode type does not support this method.`,
-    );
-  }
 }
 
 export class RRElement extends RRNode {
-  public tagName: string;
-  public attributes: Record<string, string> = {};
-  public scrollLeft: number = 0;
-  public scrollTop: number = 0;
-  public shadowRoot: RRElement | null = null;
+  tagName: string;
+  attributes: Record<string, string> = {};
+  scrollLeft: number = 0;
+  scrollTop: number = 0;
+  shadowRoot: RRElement | null = null;
 
   constructor(tagName: string) {
     super();
     this.tagName = tagName;
   }
 
+  get classList() {
+    return {
+      add: (className: string) => {},
+    };
+  }
+
+  get textContent() {
+    return '';
+  }
+
+  set textContent(newText: string) {}
+
   get style() {
-    const style = parseCSSText(this.attributes.style) as Record<
-      string,
-      string
-    > & {
+    const style = (this.attributes.style
+      ? parseCSSText(this.attributes.style)
+      : {}) as Record<string, string> & {
       setProperty: (
         name: string,
         value: string | null,
@@ -175,11 +246,11 @@ export class RRElement extends RRNode {
     return style;
   }
 
-  public setAttribute(name: string, attribute: string) {
+  setAttribute(name: string, attribute: string) {
     this.attributes[name] = attribute;
   }
 
-  public setAttributeNS(
+  setAttributeNS(
     _namespace: string | null,
     qualifiedName: string,
     value: string,
@@ -187,85 +258,107 @@ export class RRElement extends RRNode {
     this.setAttribute(qualifiedName, value);
   }
 
-  public removeAttribute(name: string) {
+  removeAttribute(name: string) {
     delete this.attributes[name];
   }
 
-  public appendChild(newChild: RRNode): RRNode {
+  appendChild(newChild: RRNode): RRNode {
     this.children.push(newChild);
     newChild.parentNode = this;
     newChild.parentElement = this;
     return newChild;
   }
 
+  insertBefore(newChild: RRNode, refChild: RRNode | null): RRNode {
+    if (refChild === null) return this.appendChild(newChild);
+    const childIndex = this.children.indexOf(refChild);
+    if (childIndex == -1)
+      throw new Error(
+        "Failed to execute 'insertBefore' on 'RRNode': The RRNode before which the new node is to be inserted is not a child of this RRNode.",
+      );
+    this.children.splice(childIndex, 0, newChild);
+    return newChild;
+  }
+
+  querySelectorAll(selectors: string): RRElement[] {
+    return [];
+  }
+
+  getElementsByTagName(tagName: string): RRElement[] {
+    let elements: RRElement[] = [];
+    if (this instanceof RRElement && this.tagName === tagName)
+      elements.push(this);
+    for (const child of this.children) {
+      if (child instanceof RRElement)
+        elements = elements.concat(child.getElementsByTagName(tagName));
+    }
+    return elements;
+  }
+
   /**
    * Creates a shadow root for element and returns it.
    */
-  public attachShadow(init: ShadowRootInit): RRElement {
+  attachShadow(init: ShadowRootInit): RRElement {
     this.shadowRoot = init.mode === 'open' ? this : null;
     return this;
   }
 }
 
 export class RRImageElement extends RRElement {
-  public src: string;
-  public width: number;
-  public height: number;
-  public onload: ((this: GlobalEventHandlers, ev: Event) => any) | null;
+  src: string;
+  width: number;
+  height: number;
+  onload: ((this: GlobalEventHandlers, ev: Event) => any) | null;
 }
 
 export class RRMediaElement extends RRElement {
-  public currentTime: number;
-  public paused: boolean;
-  public async play() {
+  currentTime: number;
+  paused: boolean;
+  async play() {
     this.paused = false;
   }
-  public async pause() {
+  async pause() {
     this.paused = true;
   }
 }
 
+export class RRIframeElement extends RRElement {
+  width: string;
+  height: string;
+  src: string;
+  contentDocument: RRDocument;
+  contentWindow: RRWindow;
+
+  constructor(tagName: string) {
+    super(tagName);
+    this.contentDocument = new RRDocument();
+    this.contentWindow = new RRWindow();
+  }
+}
+
 export class RRText extends RRNode {
-  public textContent: string;
+  textContent: string;
 
   constructor(data: string) {
     super();
     this.textContent = data;
   }
-
-  appendChild(_newChild: RRNode): RRNode {
-    throw new Error(
-      `RRDomException: Failed to execute 'appendChild' on 'RRNode': This RRNode type does not support this method.`,
-    );
-  }
 }
 
 export class RRComment extends RRNode {
-  public data: string;
+  data: string;
 
   constructor(data: string) {
     super();
     this.data = data;
-  }
-
-  appendChild(_newChild: RRNode): RRNode {
-    throw new Error(
-      `RRDomException: Failed to execute 'appendChild' on 'RRNode': This RRNode type does not support this method.`,
-    );
   }
 }
 export class RRCDATASection extends RRNode {
-  public data: string;
+  data: string;
 
   constructor(data: string) {
     super();
     this.data = data;
-  }
-
-  appendChild(_newChild: RRNode): RRNode {
-    throw new Error(
-      `RRDomException: Failed to execute 'appendChild' on 'RRNode': This RRNode type does not support this method.`,
-    );
   }
 }
 
