@@ -1,17 +1,13 @@
-import { NodeType, serializedNodeWithId } from 'rrweb-snapshot';
+import { INode, NodeType, serializedNodeWithId } from 'rrweb-snapshot';
 import { parseCSSText, camelize, toCSSText } from './style';
 
 export abstract class RRNode {
-  __sn: serializedNodeWithId;
-  children: Array<RRNode>;
+  __sn: serializedNodeWithId | undefined;
+  children: Array<RRNode> = [];
   parentElement: RRElement | null = null;
   parentNode: RRNode | null = null;
   ELEMENT_NODE = 1;
   TEXT_NODE = 3;
-
-  constructor() {
-    this.children = [];
-  }
 
   get firstChild() {
     return this.children[0];
@@ -54,6 +50,10 @@ export abstract class RRNode {
       node.parentNode = null;
     }
   }
+
+  toString(nodeName?: string) {
+    return `${JSON.stringify(this.__sn?.id) || ''} ${nodeName}`;
+  }
 }
 
 export class RRWindow {
@@ -67,6 +67,8 @@ export class RRWindow {
 }
 
 export class RRDocument extends RRNode {
+  private mirror: Map<number, RRNode> = new Map();
+
   get documentElement() {
     return this.children.filter(
       (node) => node instanceof RRElement && node.tagName === 'html',
@@ -188,6 +190,166 @@ export class RRDocument extends RRNode {
 
   open() {}
   close() {}
+
+  buildFromDom(dom: Document) {
+    let notSerializedId = -1;
+    const NodeTypeMap: Record<number, number> = {};
+    NodeTypeMap[document.DOCUMENT_NODE] = NodeType.Document;
+    NodeTypeMap[document.DOCUMENT_TYPE_NODE] = NodeType.DocumentType;
+    NodeTypeMap[document.ELEMENT_NODE] = NodeType.Element;
+    NodeTypeMap[document.TEXT_NODE] = NodeType.Text;
+    NodeTypeMap[document.CDATA_SECTION_NODE] = NodeType.CDATA;
+    NodeTypeMap[document.COMMENT_NODE] = NodeType.Comment;
+
+    function getValidTagName(element: HTMLElement): string {
+      if (element instanceof HTMLFormElement) {
+        return 'form';
+      }
+      return element.tagName.toLowerCase().trim();
+    }
+
+    const walk = function (node: INode) {
+      let serializedNodeWithId = node.__sn;
+      let rrNode: RRNode;
+      if (!serializedNodeWithId) {
+        serializedNodeWithId = {
+          type: NodeTypeMap[node.nodeType],
+          textContent: '',
+          id: notSerializedId,
+        };
+        notSerializedId -= 1;
+        node.__sn = serializedNodeWithId;
+      }
+      if (!this.mirror.has(serializedNodeWithId.id)) {
+        switch (node.nodeType) {
+          case node.DOCUMENT_NODE:
+            if (
+              serializedNodeWithId.rootId &&
+              serializedNodeWithId !== serializedNodeWithId.id
+            )
+              rrNode = this.createDocument();
+            else rrNode = this;
+            break;
+          case node.DOCUMENT_TYPE_NODE:
+            const documentType = (node as unknown) as DocumentType;
+            rrNode = this.createDocumentType(
+              documentType.name,
+              documentType.publicId,
+              documentType.systemId,
+            );
+            break;
+          case node.ELEMENT_NODE:
+            const elementNode = (node as unknown) as HTMLElement;
+            const tagName = getValidTagName(elementNode);
+            rrNode = this.createElement(tagName);
+            const rrElement = rrNode as RRElement;
+            for (const { name, value } of Array.from(elementNode.attributes)) {
+              rrElement.attributes[name] = value;
+            }
+            // form fields
+            if (
+              tagName === 'input' ||
+              tagName === 'textarea' ||
+              tagName === 'select'
+            ) {
+              const value = (elementNode as
+                | HTMLInputElement
+                | HTMLTextAreaElement).value;
+              if (
+                ['radio', 'checkbox', 'submit', 'button'].includes(
+                  rrElement.attributes.type as string,
+                ) &&
+                value
+              ) {
+                rrElement.attributes.value = value;
+              } else if ((elementNode as HTMLInputElement).checked) {
+                rrElement.attributes.checked = (elementNode as HTMLInputElement).checked;
+              }
+            }
+            if (tagName === 'option') {
+              const selectValue = (elementNode as HTMLOptionElement)
+                .parentElement;
+              if (
+                rrElement.attributes.value ===
+                (selectValue as HTMLSelectElement).value
+              ) {
+                rrElement.attributes.selected = (elementNode as HTMLOptionElement).selected;
+              }
+            }
+            // canvas image data
+            if (tagName === 'canvas') {
+              rrElement.attributes.rr_dataURL = (elementNode as HTMLCanvasElement).toDataURL();
+            }
+            // media elements
+            if (tagName === 'audio' || tagName === 'video') {
+              const rrMediaElement = rrElement as RRMediaElement;
+              rrMediaElement.paused = (elementNode as HTMLMediaElement).paused;
+              rrMediaElement.currentTime = (elementNode as HTMLMediaElement).currentTime;
+            }
+            // scroll
+            if (elementNode.scrollLeft) {
+              rrElement.scrollLeft = elementNode.scrollLeft;
+            }
+            if (elementNode.scrollTop) {
+              rrElement.scrollTop = elementNode.scrollTop;
+            }
+            break;
+          case node.TEXT_NODE:
+            rrNode = this.createTextNode(
+              ((node as unknown) as Text).textContent,
+            );
+            break;
+          case node.CDATA_SECTION_NODE:
+            rrNode = this.createCDATASection();
+            break;
+          case node.COMMENT_NODE:
+            rrNode = this.createComment(
+              ((node as unknown) as Comment).textContent || '',
+            );
+            break;
+          default:
+            return;
+        }
+        rrNode.__sn = serializedNodeWithId;
+        this.mirror.set(serializedNodeWithId.id, rrNode);
+      } else {
+        rrNode = this.mirror.get(serializedNodeWithId.id);
+        rrNode.parentElement = null;
+        rrNode.parentNode = null;
+        rrNode.children = [];
+      }
+      const parentNode = node.parentElement || node.parentNode;
+      if (parentNode) {
+        const parentSN = ((parentNode as unknown) as INode).__sn;
+        const parentRRNode = this.mirror.get(parentSN.id);
+        parentRRNode.appendChild(rrNode);
+        rrNode.parentNode = parentRRNode;
+        rrNode.parentElement =
+          parentRRNode instanceof RRElement ? parentRRNode : null;
+      }
+
+      if (
+        serializedNodeWithId.type === NodeType.Document ||
+        serializedNodeWithId.type === NodeType.Element
+      ) {
+        node.childNodes.forEach((node) => walk((node as unknown) as INode));
+      }
+    }.bind(this);
+
+    if (dom) {
+      this.destroyTree();
+      walk((dom as unknown) as INode);
+    }
+  }
+
+  destroyTree() {
+    this.children = [];
+    this.mirror.clear();
+  }
+
+  toString() {
+    return super.toString('RRDocument');
+  }
 }
 
 export class RRDocumentType extends RRNode {
@@ -201,11 +363,15 @@ export class RRDocumentType extends RRNode {
     this.publicId = publicId;
     this.systemId = systemId;
   }
+
+  toString() {
+    return super.toString('RRDocumentType');
+  }
 }
 
 export class RRElement extends RRNode {
   tagName: string;
-  attributes: Record<string, string> = {};
+  attributes: Record<string, string | number | boolean> = {};
   scrollLeft: number = 0;
   scrollTop: number = 0;
   shadowRoot: RRElement | null = null;
@@ -229,7 +395,7 @@ export class RRElement extends RRNode {
 
   get style() {
     const style = (this.attributes.style
-      ? parseCSSText(this.attributes.style)
+      ? parseCSSText(this.attributes.style as string)
       : {}) as Record<string, string> & {
       setProperty: (
         name: string,
@@ -302,6 +468,14 @@ export class RRElement extends RRNode {
     this.shadowRoot = init.mode === 'open' ? this : null;
     return this;
   }
+
+  toString() {
+    let attributeString = '';
+    for (let attribute in this.attributes) {
+      attributeString += `${attribute}="${this.attributes[attribute]}" `;
+    }
+    return `${super.toString(this.tagName)} ${attributeString}`;
+  }
 }
 
 export class RRImageElement extends RRElement {
@@ -312,8 +486,8 @@ export class RRImageElement extends RRElement {
 }
 
 export class RRMediaElement extends RRElement {
-  currentTime: number;
-  paused: boolean;
+  currentTime: number = 0;
+  paused: boolean = true;
   async play() {
     this.paused = false;
   }
@@ -323,17 +497,11 @@ export class RRMediaElement extends RRElement {
 }
 
 export class RRIframeElement extends RRElement {
-  width: string;
-  height: string;
-  src: string;
-  contentDocument: RRDocument;
-  contentWindow: RRWindow;
-
-  constructor(tagName: string) {
-    super(tagName);
-    this.contentDocument = new RRDocument();
-    this.contentWindow = new RRWindow();
-  }
+  width: string = '';
+  height: string = '';
+  src: string = '';
+  contentDocument: RRDocument = new RRDocument();
+  contentWindow: RRWindow = new RRWindow();
 }
 
 export class RRText extends RRNode {
@@ -342,6 +510,13 @@ export class RRText extends RRNode {
   constructor(data: string) {
     super();
     this.textContent = data;
+  }
+
+  toString() {
+    return `${super.toString('RRText')} text="${
+      this.textContent.replace(/\n/, '\\n').slice(0, 10) +
+      (this.textContent.length > 10 ? '...' : '')
+    }"`;
   }
 }
 
@@ -352,6 +527,13 @@ export class RRComment extends RRNode {
     super();
     this.data = data;
   }
+
+  toString() {
+    return `${super.toString('RRComment')} data="${
+      this.data.replace(/\n/, '\\n').slice(0, 10) +
+      (this.data.length > 10 ? '...' : '')
+    }"`;
+  }
 }
 export class RRCDATASection extends RRNode {
   data: string;
@@ -359,6 +541,13 @@ export class RRCDATASection extends RRNode {
   constructor(data: string) {
     super();
     this.data = data;
+  }
+
+  toString() {
+    return `${super.toString('RRCDATASection')} data="${
+      this.data.replace(/\n/, '\\n').slice(0, 10) +
+      (this.data.length > 10 ? '...' : '')
+    }"`;
   }
 }
 
