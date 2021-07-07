@@ -125,7 +125,8 @@ export class RRDocument extends RRNode {
 
   getElementsByTagName(tagName: string): RRElement[] {
     let elements: RRElement[] = [];
-    if (this instanceof RRElement && this.tagName === tagName)
+    const normalizedTagName = tagName.toLowerCase();
+    if (this instanceof RRElement && this.tagName === normalizedTagName)
       elements.push(this);
     for (const child of this.children) {
       if (child instanceof RRElement)
@@ -188,7 +189,15 @@ export class RRDocument extends RRNode {
     return new RRText(data);
   }
 
-  open() {}
+  /**
+   * This does come with some side effects. For example:
+   * 1. All event listeners currently registered on the document, nodes inside the document, or the document's window are removed.
+   * 2. All existing nodes are removed from the document.
+   */
+  open() {
+    this.children = [];
+  }
+
   close() {}
 
   buildFromDom(dom: Document) {
@@ -225,7 +234,7 @@ export class RRDocument extends RRNode {
           case node.DOCUMENT_NODE:
             if (
               serializedNodeWithId.rootId &&
-              serializedNodeWithId !== serializedNodeWithId.id
+              serializedNodeWithId.rootId !== serializedNodeWithId.id
             )
               rrNode = this.createDocument();
             else rrNode = this;
@@ -382,9 +391,12 @@ export class RRElement extends RRNode {
   }
 
   get classList() {
-    return {
-      add: (className: string) => {},
-    };
+    return new ClassList(
+      this.attributes.class as string | undefined,
+      (newClassName) => {
+        this.attributes.class = newClassName;
+      },
+    );
   }
 
   get textContent() {
@@ -452,7 +464,8 @@ export class RRElement extends RRNode {
 
   getElementsByTagName(tagName: string): RRElement[] {
     let elements: RRElement[] = [];
-    if (this instanceof RRElement && this.tagName === tagName)
+    const normalizedTagName = tagName.toLowerCase();
+    if (this instanceof RRElement && this.tagName === normalizedTagName)
       elements.push(this);
     for (const child of this.children) {
       if (child instanceof RRElement)
@@ -502,6 +515,14 @@ export class RRIframeElement extends RRElement {
   src: string = '';
   contentDocument: RRDocument = new RRDocument();
   contentWindow: RRWindow = new RRWindow();
+
+  constructor(tagName: string) {
+    super(tagName);
+    const htmlElement = this.contentDocument.createElement('html');
+    this.contentDocument.appendChild(htmlElement);
+    htmlElement.appendChild(this.contentDocument.createElement('head'));
+    htmlElement.appendChild(this.contentDocument.createElement('body'));
+  }
 }
 
 export class RRText extends RRNode {
@@ -560,3 +581,38 @@ interface RRElementTagNameMap {
 type RRElementType<
   K extends keyof HTMLElementTagNameMap
 > = K extends keyof RRElementTagNameMap ? RRElementTagNameMap[K] : RRElement;
+
+class ClassList extends Array {
+  private onChange: ((newClassText: string) => void) | undefined;
+
+  constructor(
+    classText?: string,
+    onChange?: ((newClassText: string) => void) | undefined,
+  ) {
+    super();
+    if (classText) {
+      const classes = classText.trim().split(/\s+/);
+      super.push(...classes);
+    }
+    this.onChange = onChange;
+  }
+
+  add = (...classNames: string[]) => {
+    for (const item of classNames) {
+      const className = String(item);
+      if (super.indexOf(className) >= 0) continue;
+      super.push(className);
+    }
+    this.onChange && this.onChange(super.join(' '));
+  };
+
+  remove = (...classNames: string[]) => {
+    for (const item of classNames) {
+      const className = String(item);
+      const index = super.indexOf(className);
+      if (index < 0) continue;
+      super.splice(index, 1);
+    }
+    this.onChange && this.onChange(super.join(' '));
+  };
+}
