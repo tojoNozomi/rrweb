@@ -66,6 +66,7 @@
     "@xstate/fsm": "^1.4.0",
     "fflate": "^0.4.4",
     "mitt": "^1.1.3",
+    "nwsapi": "^2.2.0",
     "rrweb-snapshot": "^1.1.6"
   }
 }

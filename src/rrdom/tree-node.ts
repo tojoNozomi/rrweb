@@ -1,4 +1,6 @@
 import { INode, NodeType, serializedNodeWithId } from 'rrweb-snapshot';
+// @ts-ignore
+import nwsapi from 'nwsapi';
 import { parseCSSText, camelize, toCSSText } from './style';
 
 export abstract class RRNode {
@@ -6,6 +8,7 @@ export abstract class RRNode {
   children: Array<RRNode> = [];
   parentElement: RRElement | null = null;
   parentNode: RRNode | null = null;
+  ownerDocument: RRDocument | null = null;
   ELEMENT_NODE = 1;
   TEXT_NODE = 3;
 
@@ -39,7 +42,11 @@ export abstract class RRNode {
   }
 
   contains(node: RRNode) {
-    throw new Error('Not implemented yet.');
+    if (node === this) return true;
+    for (const child of this.children) {
+      if (child.contains(node)) return true;
+    }
+    return false;
   }
 
   removeChild(node: RRNode) {
@@ -68,6 +75,20 @@ export class RRWindow {
 
 export class RRDocument extends RRNode {
   private mirror: Map<number, RRNode> = new Map();
+  private _nwsapi: nwsapi.NWSAPI;
+  get nwsapi() {
+    if (!this._nwsapi) {
+      this._nwsapi = nwsapi({
+        document: this,
+      });
+      this._nwsapi.configure({
+        LOGERRORS: false,
+        IDS_DUPES: true,
+        MIXEDCASE: true,
+      });
+    }
+    return this._nwsapi;
+  }
 
   get documentElement() {
     return this.children.filter(
@@ -108,6 +129,7 @@ export class RRDocument extends RRNode {
     }
     childNode.parentElement = null;
     childNode.parentNode = this;
+    childNode.ownerDocument = this;
     this.children.push(childNode);
     return childNode;
   }
@@ -120,7 +142,14 @@ export class RRDocument extends RRNode {
         "Failed to execute 'insertBefore' on 'RRNode': The RRNode before which the new node is to be inserted is not a child of this RRNode.",
       );
     this.children.splice(childIndex, 0, newChild);
+    newChild.parentElement = null;
+    newChild.parentNode = this;
+    newChild.ownerDocument = this;
     return newChild;
+  }
+
+  querySelectorAll(selectors: string): RRNode[] {
+    return this.nwsapi.select(selectors);
   }
 
   getElementsByTagName(tagName: string): RRElement[] {
@@ -148,7 +177,13 @@ export class RRDocument extends RRNode {
     publicId: string,
     systemId: string,
   ) {
-    return new RRDocumentType(qualifiedName, publicId, systemId);
+    const documentTypeNode = new RRDocumentType(
+      qualifiedName,
+      publicId,
+      systemId,
+    );
+    documentTypeNode.ownerDocument = this;
+    return documentTypeNode;
   }
 
   createElement<K extends keyof HTMLElementTagNameMap>(
@@ -157,17 +192,24 @@ export class RRDocument extends RRNode {
   createElement(tagName: string): RRElement;
   createElement(tagName: string) {
     const lowerTagName = tagName.toLowerCase();
+    let element;
     switch (lowerTagName) {
       case 'audio':
       case 'video':
-        return new RRMediaElement(lowerTagName);
+        element = new RRMediaElement(lowerTagName);
+        break;
       case 'iframe':
-        return new RRIframeElement(lowerTagName);
+        element = new RRIframeElement(lowerTagName);
+        break;
       case 'img':
-        return new RRImageElement('img');
+        element = new RRImageElement('img');
+        break;
       default:
-        return new RRElement(lowerTagName);
+        element = new RRElement(lowerTagName);
+        break;
     }
+    element.ownerDocument = this;
+    return element;
   }
 
   createElementNS(
@@ -178,15 +220,21 @@ export class RRDocument extends RRNode {
   }
 
   createComment(data: string) {
-    return new RRComment(data);
+    const commentNode = new RRComment(data);
+    commentNode.ownerDocument = this;
+    return commentNode;
   }
 
   createCDATASection(data: string) {
-    return new RRCDATASection(data);
+    const sectionNode = new RRCDATASection(data);
+    sectionNode.ownerDocument = this;
+    return sectionNode;
   }
 
   createTextNode(data: string) {
-    return new RRText(data);
+    const textNode = new RRText(data);
+    textNode.ownerDocument = this;
+    return textNode;
   }
 
   /**
@@ -444,6 +492,7 @@ export class RRElement extends RRNode {
     this.children.push(newChild);
     newChild.parentNode = this;
     newChild.parentElement = this;
+    newChild.ownerDocument = this.ownerDocument;
     return newChild;
   }
 
@@ -455,10 +504,16 @@ export class RRElement extends RRNode {
         "Failed to execute 'insertBefore' on 'RRNode': The RRNode before which the new node is to be inserted is not a child of this RRNode.",
       );
     this.children.splice(childIndex, 0, newChild);
+    newChild.parentElement = null;
+    newChild.parentNode = this;
+    newChild.ownerDocument = this.ownerDocument;
     return newChild;
   }
 
-  querySelectorAll(selectors: string): RRElement[] {
+  querySelectorAll(selectors: string): RRNode[] {
+    if (this.ownerDocument !== null) {
+      return this.ownerDocument.nwsapi.select(selectors, this);
+    }
     return [];
   }
 
@@ -472,6 +527,10 @@ export class RRElement extends RRNode {
         elements = elements.concat(child.getElementsByTagName(tagName));
     }
     return elements;
+  }
+
+  dispatchEvent(_event: Event) {
+    return true;
   }
 
   /**

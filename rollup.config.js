@@ -1,5 +1,6 @@
 import typescript from 'rollup-plugin-typescript';
 import resolve from 'rollup-plugin-node-resolve';
+import commonjs from 'rollup-plugin-commonjs';
 import { terser } from 'rollup-plugin-terser';
 import postcss from 'rollup-plugin-postcss';
 import renameNodeModules from 'rollup-plugin-rename-node-modules';
@@ -98,7 +99,7 @@ const baseConfigs = [
 let configs = [];
 
 for (const c of baseConfigs) {
-  const basePlugins = [resolve({ browser: true }), typescript()];
+  const basePlugins = [resolve({ browser: true }), commonjs(), typescript()];
   const plugins = basePlugins.concat(
     postcss({
       extract: false,
@@ -177,6 +178,12 @@ if (process.env.BROWSER_ONLY) {
       name: 'rrwebConsoleRecord',
       pathFn: toPluginPath('console', 'record'),
     },
+    {
+      input: './src/rrdom/index.ts',
+      name: 'rrdom',
+      pathFn: (path) =>
+        path.replace(/^([\w]+)\//, '$1/rrdom/').replace('rrweb', 'rrdom'),
+    },
   ];
 
   configs = [];
@@ -185,6 +192,7 @@ if (process.env.BROWSER_ONLY) {
     const plugins = [
       resolve({ browser: true }),
       typescript(),
+      commonjs(),
       postcss({
         extract: false,
         inject: false,
