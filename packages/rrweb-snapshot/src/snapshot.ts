@@ -213,7 +213,8 @@ export function transformAttribute(
   value: string,
 ): string {
   // relative path in attribute
-  if (name === 'src' || ((name === 'href' || name === 'xlink:href') && value)) {
+  // if (name === 'src' || ((name === 'href' || name === 'xlink:href') && value)) {
+  if (name === 'src' || ((name === 'href') && value)) {
     return absoluteToDoc(doc, value);
   } else if (
     name === 'background' &&
