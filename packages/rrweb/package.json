@@ -1,5 +1,5 @@
 {
-  "name": "rrweb-customer",
+  "name": "rrweb-custom",
   "version": "0.0.3",
   "description": "record and replay the web",
   "scripts": {
