@@ -157,7 +157,7 @@ for (const c of baseConfigs) {
       output: [
         {
           format: 'esm',
-          dir: 'es/rrweb',
+          dir: './es/rrweb',
           plugins: [renameNodeModules('ext')],
         },
       ],
