@@ -15,8 +15,6 @@
   "private": true,
   "homepage": "https://github.com/rrweb-io/rrweb#readme",
   "workspaces": [
-    "packages/rrweb",
-    "packages/rrweb-snapshot",
-    "packages/rrweb-player"
+    "packages/*"
   ]
 }
